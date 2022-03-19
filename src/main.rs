@@ -1,22 +1,28 @@
 use suffix::SuffixTable;
+use std::collections::VecDeque;
 
 
 fn main() {
 
-    let s1 = "abcdef".to_string();
-    let s2 = "xyzabcdfe".to_string();
-    let lengths = [s1.len(), s2.len()];
-    let sentinel = '0';
+    let s1 = "banana".to_string();
+    let s2 = "appledbanabo".to_string();
+    let s3 = "xyz_ban".to_string();
+    let lengths = [s1.len(), s2.len(), s3.len()];
+    let sentinel = '!';
 
-    let combined = format!("{}{}{}{}", s1, sentinel, s2, sentinel);
+    let combined = format!("{}{}{}{}{}{}", s1, sentinel, s2, sentinel, s3, sentinel);
 
     let st = SuffixTable::new(&combined);
     let lcp = get_lcp_array_from_suffix_array(combined.as_str().as_bytes(), st.table());
     let segments = calculate_segments(&lengths, 2, st.table());
+    let best = process_segments(&segments, &lcp);
 
     println!("{}", &combined);
     println!("{:?}", st);
+    println!("{:?}", st.lcp_lens());
+    println!("{:?}", lcp);
     println!("{:?}", &segments);
+    println!("{:?}", best);
 }
 
 /* 
@@ -49,6 +55,7 @@ Algorithm stages:
         We are interseted in keeping track of the minimum of a contiguous sequence: Use https://people.cs.uct.ac.za/~ksmith/articles/sliding_window_minimum.html to do it amortized O(1) time per index
 */
 
+/* Represents the range [start, end).*/
 #[derive(Debug)]
 struct Segment {
     start: usize,
@@ -156,6 +163,48 @@ fn calculate_segments(input_lengths: &[usize], k_requirement: u32, suffix_array:
     }
 
     return segments;
+}
+
+#[derive(Debug)]
+struct ValAndIdx{
+    val: usize, 
+    idx: usize,
+}
+
+/* Keep track of the minimum lcp value between each segment's start and end. Return the maximum of those. */
+fn process_segments<'a>(segments: &'a Vec<Segment>, lcp_array: &Vec<usize>) -> (&'a Segment, usize) {
+    if segments.len() == 0 {
+        panic!("No segments passed into process segments"); // TODO; use result
+    }
+    let mut max = 0;
+    let mut max_segment = &segments[0];
+
+    let mut window: VecDeque<ValAndIdx> = VecDeque::new();
+    let mut window_end = 0;
+
+    for segment in segments {
+        // Add elements to sliding optimized window to contain 
+        while segment.end > window_end + 1 {
+            let lcp_val = lcp_array[window_end];
+            while !window.is_empty() && window.back().unwrap().val >= lcp_val {
+                window.pop_back();
+            }
+            window.push_back(ValAndIdx {val: lcp_val, idx: window_end});
+            window_end += 1;
+        }
+
+        if !window.is_empty() && segment.start > window.front().unwrap().idx {
+            window.pop_front();
+        }
+
+        let window_min = window.front().unwrap().val;
+        if window_min > max {
+            max = window_min;
+            max_segment = &segment;
+        }
+    }
+
+    return (max_segment, max);
 }
 
 /* Construct the inverse of a permutation on 0..n.  */
