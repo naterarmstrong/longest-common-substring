@@ -1,6 +1,7 @@
 use suffix::SuffixTable;
 use std::collections::VecDeque;
 
+const K: u32 = 2;
 
 fn main() {
 
@@ -11,18 +12,22 @@ fn main() {
     let sentinel = '!';
 
     let combined = format!("{}{}{}{}{}{}", s1, sentinel, s2, sentinel, s3, sentinel);
+    let idx_to_document = get_idx_to_document_array(&lengths);
 
     let st = SuffixTable::new(&combined);
     let lcp = get_lcp_array_from_suffix_array(combined.as_str().as_bytes(), st.table());
-    let segments = calculate_segments(&lengths, 2, st.table());
-    let best = process_segments(&segments, &lcp);
+    let segments = calculate_segments(idx_to_document, K, lengths.len(), st.table());
+    let lcs_metadata = process_segments(&segments, &lcp);
+    let lcs = get_string_from_lcs_metadata(lcs_metadata.0, lcs_metadata.1, st.table(), &combined);
+    print_lcs_output(&lengths, lcs, &st);
 
-    println!("{}", &combined);
+    /*println!("{}", &combined);
     println!("{:?}", st);
     println!("{:?}", st.lcp_lens());
     println!("{:?}", lcp);
     println!("{:?}", &segments);
-    println!("{:?}", best);
+    println!("{:?}", lcs_metadata);
+    println!("{}", lcs); */
 }
 
 /* 
@@ -97,11 +102,13 @@ fn get_lcp_array_from_suffix_array(s: &[u8], suffix_array: &[u32]) -> Vec<usize>
     return lcp;
 }
 
-/* Returns the segments which are candidates for containing the longest common substring. */
-fn calculate_segments(input_lengths: &[usize], k_requirement: u32, suffix_array: &[u32]) -> Vec<Segment> {
+/* Returns a vector v such that for an index i in the combined string,
+    v[i] := the document index, 1-indexed. 0 represents a sentinel. */
+fn get_idx_to_document_array(input_lengths: &[usize]) -> Vec<usize> {
     if input_lengths.len() == 0 {
         return Vec::new();
     }
+
     // The combined byte string has length equal to the sum of inputs, plus the sentinels dividing strings
     let n = input_lengths.iter().sum::<usize>() + input_lengths.len();
     let input_ct = input_lengths.len();
@@ -123,17 +130,24 @@ fn calculate_segments(input_lengths: &[usize], k_requirement: u32, suffix_array:
         }
     }
 
-    let mut k_count = 0;
-    let mut buckets = vec![0; input_ct];
-    let mut segments = Vec::new();
-    let mut right_bound = input_ct;
+    return t;
+}
 
-    for i in input_ct..n {
+/* Returns the segments which are candidates for containing the longest common substring. */
+fn calculate_segments(idx_to_document: Vec<usize>, k_requirement: u32, n_documents: usize, suffix_array: &[u32]) -> Vec<Segment> {
+    let n = suffix_array.len();
+
+    let mut k_count = 0;
+    let mut buckets = vec![0; n_documents];
+    let mut segments = Vec::new();
+    let mut right_bound = n_documents;
+
+    for i in n_documents..n {
         // Expand this segment until it is K-good
         while k_count < k_requirement && right_bound < n {
-            let t_val = t[suffix_array[right_bound] as usize];
-            if t_val != 0 {
-                let bucket = t_val - 1;
+            let doc_val = idx_to_document[suffix_array[right_bound] as usize];
+            if doc_val != 0 {
+                let bucket = doc_val - 1;
                 // It's not a sentinel
                 if buckets[bucket] == 0 {
                     k_count += 1;
@@ -151,9 +165,9 @@ fn calculate_segments(input_lengths: &[usize], k_requirement: u32, suffix_array:
         segments.push(Segment{start: i, end: right_bound});
 
         // Remove the start index
-        let t_val = t[suffix_array[i] as usize];
-        if t_val != 0 {
-            let bucket = t_val - 1;
+        let doc_val = idx_to_document[suffix_array[i] as usize];
+        if doc_val != 0 {
+            let bucket = doc_val - 1;
             buckets[bucket] -= 1;
             if buckets[bucket] == 0 {
                 k_count -= 1;
@@ -205,6 +219,32 @@ fn process_segments<'a>(segments: &'a Vec<Segment>, lcp_array: &Vec<usize>) -> (
     }
 
     return (max_segment, max);
+}
+
+fn get_string_from_lcs_metadata<'a>(segment: &Segment, length: usize, suffix_array: &[u32], combined: &'a String) -> &'a str {
+    let idx = suffix_array[segment.start] as usize;
+
+    return &combined.as_str()[idx..idx + length];
+}
+
+fn print_lcs_output(document_lengths: &[usize], lcs: &str, st: &SuffixTable) {
+    println!("Found the longest common substring to be of length {}", lcs.len());
+
+    let locations = st.positions(lcs);
+    for location in locations {
+        let (doc_index, start_index) = get_document_index(document_lengths, *location as usize);
+        println!("Found in document {} at index {}", doc_index, start_index);
+    }
+}
+
+/* Returns (document_index, start_index). */
+fn get_document_index(document_lengths: &[usize], mut index: usize) -> (usize, usize) {
+    let mut i = 0;
+    while index > document_lengths[i] {
+        index -= document_lengths[i] + 1;
+        i += 1;
+    }
+    return (i, index);
 }
 
 /* Construct the inverse of a permutation on 0..n.  */
