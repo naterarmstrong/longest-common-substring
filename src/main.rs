@@ -19,8 +19,6 @@ fn main() -> Result<(), Error> {
 
     let k: u32 = matches.value_of("min_matches").map(|k| k.parse()).unwrap_or(Ok(2)).unwrap();
     let files: Vec<&str> = matches.values_of("files").unwrap().collect();
-    //println!("{}", k);
-    //println!("{:?}", files);
 
     let mut input: Vec<Vec<u8>> = Vec::new();
     for filename in &files {
@@ -28,9 +26,9 @@ fn main() -> Result<(), Error> {
     }
 
     let out = run(&input, k);
-    println!("Found the longest common substring to be of length {} at positions:", out.0);
-    for (file_idx, offset) in out.1 {
-        println!("    Offset {} in file {}.", offset, files[file_idx]);
+    println!("Found the longest common substring to be of length {} at positions:", out.length);
+    for position in out.positions {
+        println!("    Offset {} in file {}.", position.offset, files[position.file_index]);
     }
 
     Ok(())

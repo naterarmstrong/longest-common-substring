@@ -1,5 +1,5 @@
 use suffix_array::SuffixArray;
-use std::{collections::VecDeque};
+use std::{collections::{VecDeque, HashSet}};
 
 const LCP_SENTINEL: u32 = u32::MAX;
 const SENTINEL: u8 = 0;
@@ -61,8 +61,19 @@ How to only store the data as a byte array instead of going up to u16 array:
 */
 
 
+#[derive(Debug)]
+pub struct LCSOutput {
+    pub length: usize,
+    pub positions: Vec<FilePosition>
+}
 
-pub fn run(inputs: &Vec<Vec<u8>>, k: u32) -> (usize, Vec<(usize, usize)>) {
+#[derive(Debug)]
+pub struct FilePosition {
+    pub file_index: usize,
+    pub offset: usize,
+}
+
+pub fn run(inputs: &Vec<Vec<u8>>, k: u32) -> LCSOutput {
     let lengths: Vec<usize> = inputs.iter().map(|input| input.len()).collect();
     let total_size: usize = &lengths.iter().sum() + inputs.len();
     let mut combined = Vec::with_capacity(total_size);
@@ -71,19 +82,17 @@ pub fn run(inputs: &Vec<Vec<u8>>, k: u32) -> (usize, Vec<(usize, usize)>) {
         combined.push(SENTINEL);
     }
     let idx_to_document = get_idx_to_document_array(&lengths);
+    let sentinel_pos = get_sentinel_checker(&lengths);
 
     let sa = SuffixArray::new(&combined);
     let sa_raw = &sa.into_parts().1[1..];
-    //println!("{:?}", sa_raw);
     
     let rank = get_inverse_of_permutation(sa_raw);
     let lcp = get_lcp_array_from_suffix_array(&combined, sa_raw, &idx_to_document, &rank);
     let segments = calculate_segments(&idx_to_document, k, inputs.len(), sa_raw);
     let lcs_metadata = process_segments(&segments, &lcp);
     let lcs_positions = get_positions_from_segment(lcs_metadata.0, &lengths, sa_raw, &idx_to_document);
-    //println!("Input: {:?}", combined);
-    //println!("LCS Metadata: {:?}", &lcs_metadata);
-    (lcs_metadata.1, lcs_positions)
+    LCSOutput{ length: lcs_metadata.1, positions: lcs_positions}
 }
 
 /* Represents the range [start, end).*/
@@ -169,6 +178,17 @@ fn get_idx_to_document_array(input_lengths: &[usize]) -> Vec<usize> {
     }
 
     return t;
+}
+
+fn get_sentinel_checker(input_lengths: &[usize]) -> HashSet<usize> {
+    let mut cur_pos = 0;
+    let mut sentinel_set = HashSet::new();
+    for length in input_lengths {
+        cur_pos += length;
+        sentinel_set.insert(cur_pos+1);
+        cur_pos += 1;
+    }
+    sentinel_set
 }
 
 /* Returns the segments which are candidates for containing the longest common substring. */
@@ -262,23 +282,23 @@ fn process_segments<'a>(segments: &'a Vec<Segment>, lcp_array: &Vec<usize>) -> (
 }
 
 /* Returns (document_index, start_index)[]. */
-fn get_positions_from_segment(segment: &Segment, lengths: &[usize], suffix_array: &[u32], idx_to_document: &[usize]) -> Vec<(usize, usize)> {
+fn get_positions_from_segment(segment: &Segment, lengths: &[usize], suffix_array: &[u32], idx_to_document: &[usize]) -> Vec<FilePosition> {
     let mut positions = Vec::new();
     for i in (segment.start..segment.end).filter(|v| idx_to_document[suffix_array[*v] as usize] != 0) {
-        positions.push(get_document_index(lengths, suffix_array[i] as usize));
+        positions.push(get_file_position(lengths, suffix_array[i] as usize));
     }
-    positions.sort_by(|(a, _), (b, _)| a.cmp(b));
+    positions.sort_by(|a, b| (a.file_index).cmp(&b.file_index));
     positions
 }
 
 /* Returns (document_index, start_index). */
-fn get_document_index(document_lengths: &[usize], mut index: usize) -> (usize, usize) {
+fn get_file_position(document_lengths: &[usize], mut index: usize) -> FilePosition {
     let mut i = 0;
     while index > document_lengths[i] {
         index -= document_lengths[i] + 1;
         i += 1;
     }
-    return (i, index);
+    FilePosition{file_index: i, offset: index}
 }
 
 /* Construct the inverse of a permutation on 0..n.  */

@@ -14,7 +14,6 @@ done
 rm -rf benchmark_results
 mkdir benchmark_results
 
-cmd="hyperfine --warmup 3 "
 cmds=()
 for n in {1..9}; do
     files=""
