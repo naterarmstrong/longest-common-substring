@@ -1,33 +1,36 @@
 use suffix::SuffixTable;
+use suffix_array::SuffixArray;
 use std::collections::VecDeque;
 
 const K: u32 = 2;
+const LCP_SENTINEL: u32 = u32::MAX;
+const SENTINEL: u8 = 0;
 
 fn main() {
+
 
     let s1 = "banana".to_string();
     let s2 = "appledbanabo".to_string();
     let s3 = "xyz_ban".to_string();
     let lengths = [s1.len(), s2.len(), s3.len()];
-    let sentinel = '!';
+    let sentinel = '\0';
 
     let combined = format!("{}{}{}{}{}{}", s1, sentinel, s2, sentinel, s3, sentinel);
     let idx_to_document = get_idx_to_document_array(&lengths);
 
+
+
+    let sa_vec = SuffixArray::new(combined.as_bytes()).into_parts().1;
+    let sa = &sa_vec[1..];
+    println!("{:?}", sa);
+
     let st = SuffixTable::new(&combined);
-    let lcp = get_lcp_array_from_suffix_array(combined.as_str().as_bytes(), st.table());
+    let lcp = get_lcp_array_from_suffix_array(combined.as_str().as_bytes(), sa, &idx_to_document);
     let segments = calculate_segments(idx_to_document, K, lengths.len(), st.table());
     let lcs_metadata = process_segments(&segments, &lcp);
     let lcs = get_string_from_lcs_metadata(lcs_metadata.0, lcs_metadata.1, st.table(), &combined);
-    print_lcs_output(&lengths, lcs, &st);
+    //print_lcs_output(&lengths, lcs, &st);
 
-    /*println!("{}", &combined);
-    println!("{:?}", st);
-    println!("{:?}", st.lcp_lens());
-    println!("{:?}", lcp);
-    println!("{:?}", &segments);
-    println!("{:?}", lcs_metadata);
-    println!("{}", lcs); */
 }
 
 /* 
@@ -57,18 +60,41 @@ Algorithm stages:
         Keep a counter per document and a counter of how many are nonzero, update appropriately
     
     To maintain values from (2):
-        We are interseted in keeping track of the minimum of a contiguous sequence: Use https://people.cs.uct.ac.za/~ksmith/articles/sliding_window_minimum.html to do it amortized O(1) time per index
+        We are interested in keeping track of the minimum of a contiguous sequence: Use https://people.cs.uct.ac.za/~ksmith/articles/sliding_window_minimum.html to do it amortized O(1) time per index
+*/
+
+/*
+How to only store the data as a byte array instead of going up to u16 array:
+    Use byte suffix array, use 0 byte as sentinel.
+        Problem: There may be non-sentinel entries at the start of the array
+        Solution: Skip past entries that start with a sentinel in LCP to still match consecutive strings in true suffix array (that which would be constructed w/o sentinels)
+    
+    LCP Creation:
+        Do the same algorithm as before, but pretend that values that start with a sentinel are not there. Similarly, break computation when hitting a sentinel.
+        Maybe fill in sentinel values with u32.MAX or something. We won't get that large of files anyways. Adding option would add overhead, ruin the point of keping it as u8 instead of u16
+        Result: LCP array which is correct, some values marked as ignored (assuming we can't handle combined file size above 2**32 bytes anyways, we will never get lcs of that length)
+    
+    Calculate Segments:
+        Once again, similar algo to before, but need to start from 0, and skip sentinels as we go. Algo becomes almost identical.
+    
+    Process Segments:
+        Just increment past sentinels when iterating. Otherwise, keep the same algo
+    
+
+
+    Suffix Array: ith position is the lexicographic order of the suffix s[i..]
+    LCP Array: ith position is the lcp between ith ordered suffix and i+1th ordered suffix (ignoring sentinels)
 */
 
 /* Represents the range [start, end).*/
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct Segment {
     start: usize,
     end: usize,
 }
 
 // Kasai construction algo. TODO: proper reference
-fn get_lcp_array_from_suffix_array(s: &[u8], suffix_array: &[u32]) -> Vec<usize> {
+fn get_lcp_array_from_suffix_array(s: &[u8], suffix_array: &[u32], idx_to_document: &Vec<usize>) -> Vec<usize> {
     let n = suffix_array.len();
 
     // Construct the rank array. rank is the inverse of suffix array as a permutation of 1..n
@@ -78,16 +104,31 @@ fn get_lcp_array_from_suffix_array(s: &[u8], suffix_array: &[u32]) -> Vec<usize>
 
     let mut lcp_len = 0;
 
+    // i := position in combined string
     for i in 0..n {
-        if rank[i] == n - 1 {
+        // Check this for sanity. Should I be checking if i is a sentinel, or if rank[i] is a sentinel...
+        if idx_to_document[i] == 0 {
+            lcp[rank[i]] = LCP_SENTINEL as usize;
+            continue;
+        } else if rank[i] == n - 1 {
             lcp_len = 0;
             continue;
         }
 
         // Next substring
-        let j = suffix_array[rank[i] + 1] as usize;
+        let mut d_to_next_non_sentinel = 1;
+        let mut j = suffix_array[rank[i] + d_to_next_non_sentinel] as usize; //TODO: iterate until we hit a non-sentinel
+        while idx_to_document[j] == 0 {
+            d_to_next_non_sentinel += 1;
+            if rank[i] + d_to_next_non_sentinel >= n - 1 {
+                // TODO: handle this case properly
+                lcp_len = 0;
+                continue;
+            }
+            j = suffix_array[rank[i] + d_to_next_non_sentinel] as usize;
+        }
 
-        while (i + lcp_len < n) && (j + lcp_len < n) && s[i + lcp_len] == s[j + lcp_len] {
+        while (i + lcp_len < n) && (j + lcp_len < n) && s[i + lcp_len] == s[j + lcp_len] && idx_to_document[i + lcp_len] != 0 && idx_to_document[j + lcp_len] != 0 { //TODO: If either one is a sentinel, say they are not equal
             lcp_len += 1;
         }
 
@@ -140,9 +181,9 @@ fn calculate_segments(idx_to_document: Vec<usize>, k_requirement: u32, n_documen
     let mut k_count = 0;
     let mut buckets = vec![0; n_documents];
     let mut segments = Vec::new();
-    let mut right_bound = n_documents;
+    let mut right_bound = 0;
 
-    for i in n_documents..n {
+    for i in 0..n {
         // Expand this segment until it is K-good
         while k_count < k_requirement && right_bound < n {
             let doc_val = idx_to_document[suffix_array[right_bound] as usize];
@@ -200,10 +241,12 @@ fn process_segments<'a>(segments: &'a Vec<Segment>, lcp_array: &Vec<usize>) -> (
         // Add elements to sliding optimized window to contain 
         while segment.end > window_end + 1 {
             let lcp_val = lcp_array[window_end];
-            while !window.is_empty() && window.back().unwrap().val >= lcp_val {
-                window.pop_back();
+            if lcp_val != (LCP_SENTINEL as usize) {
+                while !window.is_empty() && window.back().unwrap().val >= lcp_val {
+                    window.pop_back();
+                }
+                window.push_back(ValAndIdx {val: lcp_val, idx: window_end});
             }
-            window.push_back(ValAndIdx {val: lcp_val, idx: window_end});
             window_end += 1;
         }
 
@@ -255,4 +298,76 @@ fn get_inverse_of_permutation(permutation: &[u32]) -> Vec<usize> {
         inverse[permutation[i] as usize] = i;
     }
     return inverse;
+}
+
+
+
+
+/*** Tests ***/
+#[cfg(test)]
+mod tests {
+    use crate::{get_lcp_array_from_suffix_array, get_idx_to_document_array, LCP_SENTINEL, calculate_segments, process_segments, Segment};
+    use suffix::SuffixTable;
+    use suffix_array::SuffixArray;
+
+    #[test]
+    fn correct_lcp_from_strings() {
+        let s1 = "banana".to_string();
+        let s2 = "appledbanab".to_string();
+        let lengths = [s1.len(), s2.len()];
+        let sentinel = '!';
+
+        let combined = format!("{}{}{}{}", s1, sentinel, s2, sentinel);
+        let idx_to_document = get_idx_to_document_array(&lengths);
+
+        let st = SuffixTable::new(&combined);
+        let lcp = get_lcp_array_from_suffix_array(combined.as_str().as_bytes(), st.table(), &idx_to_document);
+        let sent = LCP_SENTINEL as usize;
+
+        assert_eq!(lcp, vec![sent, sent, 1, 1, 3, 3, 1, 0, 1, 4, 0, 0, 0, 0, 2, 2, 0, 1, 0]);
+    }
+
+    #[test]
+    fn correctly_handles_lcp_sentinel_duplicates() {
+        let mut s1: Vec<u8> = vec![0, 0, 98, 97, 110]; // \0\0ban
+        let mut s2: Vec<u8> = vec![97, 0, 0, 98, 120, 121]; // a\0\0bxy
+        let lengths = [s1.len(), s2.len()];
+        let idx_to_document = get_idx_to_document_array(&lengths);
+
+        // Store combined in s1. A bit hacky, but works
+        s1.push(0); // Sentinel
+        s2.push(0); // Sentinel
+        s1.extend(&s2);
+
+        let sa_vec = SuffixArray::new(&s1).into_parts().1;
+        let sa = &sa_vec[1..];
+
+        let lcp = get_lcp_array_from_suffix_array(&s1, sa, &idx_to_document);
+        let sent = LCP_SENTINEL as usize;
+
+        assert_eq!(sa, vec![12, 0, 7, 5, 1, 8, 6, 3, 2, 9, 4, 10, 11]);
+        assert_eq!(lcp, vec![sent, 3, 1, sent, 2, 0, 1, 0, 1, 0, 0, 0, 0]); // Notice that the 3rd entry is matching lcp with the 5th and skipping the sentinel
+    }
+
+    #[test]
+    fn correctly_finds_lcs_len_that_contains_sentinel() {
+        let mut s1: Vec<u8> = vec![0, 0, 98, 97, 110]; // \0\0ban
+        let mut s2: Vec<u8> = vec![97, 0, 0, 98, 120, 121]; // a\0\0bxy
+        let lengths = [s1.len(), s2.len()];
+        let idx_to_document = get_idx_to_document_array(&lengths);
+
+        // Store combined in s1. A bit hacky, but works
+        s1.push(0); // Sentinel
+        s2.push(0); // Sentinel
+        s1.extend(&s2);
+
+        let sa_vec = SuffixArray::new(&s1).into_parts().1;
+        let sa = &sa_vec[1..];
+
+        let lcp = get_lcp_array_from_suffix_array(&s1, sa, &idx_to_document);
+        let segments = calculate_segments(idx_to_document, 2, lengths.len(), sa);
+        let lcs_metadata = process_segments(&segments, &lcp);
+        assert_eq!(lcs_metadata.0, &Segment {start: 0, end: 3});
+        assert_eq!(lcs_metadata.1, 3);
+    }
 }

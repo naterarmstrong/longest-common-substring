@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 suffix = "1.2.0"
+suffix_array = "0.5.0"
