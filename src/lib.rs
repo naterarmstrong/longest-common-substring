@@ -294,7 +294,7 @@ fn get_inverse_of_permutation(permutation: &[u32]) -> Vec<usize> {
 
 
 
-/*** Tests ***/
+/*** Tests for small-scale correctness ***/
 #[cfg(test)]
 mod tests {
     use super::*;
