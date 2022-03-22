@@ -1,6 +1,6 @@
-use std::io::Error;
-use std::fs;
 use clap::{arg, Command};
+use std::fs;
+use std::io::Error;
 
 use longest_common_substring::run;
 
@@ -17,7 +17,11 @@ fn main() -> Result<(), Error> {
         )
         .get_matches();
 
-    let k: u32 = matches.value_of("min_matches").map(|k| k.parse()).unwrap_or(Ok(2)).unwrap();
+    let k: u32 = matches
+        .value_of("min_matches")
+        .map(|k| k.parse())
+        .unwrap_or(Ok(2))
+        .unwrap();
     let files: Vec<&str> = matches.values_of("files").unwrap().collect();
 
     let mut input: Vec<Vec<u8>> = Vec::new();
@@ -26,9 +30,15 @@ fn main() -> Result<(), Error> {
     }
 
     let out = run(&input, k);
-    println!("Found the longest common substring to be of length {} at positions:", out.length);
+    println!(
+        "Found the longest common substring to be of length {} at positions:",
+        out.length
+    );
     for position in out.positions {
-        println!("    Offset {} in file {}.", position.offset, files[position.file_index]);
+        println!(
+            "    Offset {} in file {}.",
+            position.offset, files[position.file_index]
+        );
     }
 
     Ok(())
