@@ -1,12 +1,14 @@
 use std::collections::VecDeque;
 use suffix_array::SuffixArray;
 
-const LCP_SENTINEL: u32 = u32::MAX;
+const LCP_SENTINEL: usize = u32::MAX as usize;
 const SENTINEL: u8 = 0;
 const SENTINEL_IDX: usize = 0;
 
 /*
-Algorithm Definitions:
+Summary of info from `Computing Longest Common Substrings Via Suffix Arrays` by Babenko and Starikovskaya
+
+Definitions:
     The rank is the inverse of the suffix array permutation of 1..n
     K-good means a set of positions that contains positions with from K different initial strings
     lcp(i) is the length of the longest common prefix of the ith and i+1th suffix (ordered in suffix array)
@@ -14,65 +16,72 @@ Algorithm Definitions:
     L_0 refers to the largest integer i with a K-good segment starting at i.
     w(i) is the minimum lcp(j) with j contained in the bounds of delta_i
 
-Paper statements:
+Statements:
     For any pair of indices, the longest common prefix of their positions in the suffix array is the minimum
         of the pairwise lcp values between i and j.
 
-    lcp(rank(i+1)) >= lcp(rank(i)) - 1 so we can skip checking the first lcp(rank(i)) -1 letters when computing
-        the value for rank(i+1)
-
 Algorithm stages:
-    Combine input strings into output of length L, construct suffix array and lcp array
+    Combine input strings into output of length L separated by sentinel values which are distinct and strictly
+        smaller than all other letters in the alphabet.
+    Construct suffix array and lcp array according to above definitions.
+    When constructing lcp array, take advantage of the fact that lcp[rank(i+1]) >= lcp(rank[i]) - 1 to do it in O(n) time.
 
-    Compute delta_{n+1} -> delta_{L_0}.
-        This can be done by stepping the right index until k-good, then initializing next one at that same spot
+    Compute minimal segments starting at each index.. This can be done by stepping the right index until k-good,
+     then initializing next right index at that same spot.
 
     To test for K-goodness quickly:
-        Keep track of t(j) array which you index into to get the type of an index in the string
-        Keep a counter per document and a counter of how many are nonzero, update appropriately
+        Keep track of t(j) array which you index into to get the type of an index in the string.
+        Keep a counter per document and a counter of how many are nonzero, update appropriately.
 
-    To maintain values from (2):
-        We are interested in keeping track of the minimum of a contiguous sequence: Use https://people.cs.uct.ac.za/~ksmith/articles/sliding_window_minimum.html to do it amortized O(1) time per index
+    To process the segments:
+        We are interested in keeping track of the minimum of a contiguous sequence.
+        Use an ordered deque to get each minimum in amortized O(1).
+        Keep track of the segment and maximum length seen while iterating through.
+    
+    To get output:
+        Every index found in the segment contains the LCP. Convert them back to document:offset, then return.
 */
 
 /*
-How to only store the data as a byte array instead of going up to u16 array:
+Modifications to only store the data as a byte array instead of going up to u16 array:
+    Big Idea:
+        Instead of letting the sentinels be distinct from the alphabet in question (which would then require going from u8 to u16),
+        we keep track of the locations of the sentinels when constructing LCP array and calculating/processing segments.
+        This lets us continue to use a library to construct the suffix array.
+        If the suffix array construction was done manually, the rest of these changes would be less necessary.
+
     Use byte suffix array, use 0 byte as sentinel.
         Problem: There may be non-sentinel entries at the start of the array
-        Solution: Skip past entries that start with a sentinel in LCP to still match consecutive strings in true suffix array (that which would be constructed w/o sentinels)
+        Solution: Skip past entries that start with a sentinel in LCP to still match consecutive strings in 'true' suffix array (that which would be constructed w/o sentinels)
 
     LCP Creation:
-        Do the same algorithm as before, but pretend that values that start with a sentinel are not there. Similarly, break computation when hitting a sentinel.
-        Maybe fill in sentinel values with u32.MAX or something. We won't get that large of files anyways. Adding option would add overhead, ruin the point of keping it as u8 instead of u16
-        Result: LCP array which is correct, some values marked as ignored (assuming we can't handle combined file size above 2**32 bytes anyways, we will never get lcs of that length)
+        Do the same algorithm as before, but pretend that values that start with a sentinel are not there. Similarly, break matching when hitting a sentinel.
+        Fill in sentinel values with u32.MAX. We won't get that large of files anyways. Adding option would add overhead, ruin the point of keping it as u8 instead of u16.
+        Result: LCP array which is correct, some values marked LCP_SENTINEL to be ignored.
 
     Calculate Segments:
-        Once again, similar algo to before, but need to start from 0, and skip sentinels as we go. Algo becomes almost identical.
+        Once again, similar algo to before, but need to start from 0, and skip sentinels as we go. Algorithm is almost identical.
 
     Process Segments:
         Just increment past sentinels when iterating. Otherwise, keep the same algo
-
-
-
-    Suffix Array: ith position is the lexicographic order of the suffix s[i..]
-    LCP Array: ith position is the lcp between ith ordered suffix and i+1th ordered suffix (ignoring sentinels)
 
     Final segment:
         Every non-sentinel contained in this segment MUST have the LCS starting at the start index. So there's no need to match again.
 */
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct LCSOutput {
     pub length: usize,
     pub positions: Vec<FilePosition>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct FilePosition {
     pub file_index: usize,
     pub offset: usize,
 }
 
+/* Return LCSOutput representing the length and position of the longest common substring which exists in k or more of the input files. */
 pub fn run(inputs: &Vec<Vec<u8>>, k: u32) -> LCSOutput {
     let lengths: Vec<usize> = inputs.iter().map(|input| input.len()).collect();
     let total_size: usize = &lengths.iter().sum() + inputs.len();
@@ -98,15 +107,14 @@ pub fn run(inputs: &Vec<Vec<u8>>, k: u32) -> LCSOutput {
     }
 }
 
-/* Represents the range [start, end).*/
+/* Represents the range [start, end) within the suffix array.*/
 #[derive(Debug, PartialEq)]
 struct Segment {
     start: usize,
     end: usize,
 }
 
-// Kasai's suffix array construction algorithm, slightly modified to use sentinel positions instead of lexicographically distinct
-// sentinels
+/* Kasai's suffix array construction algorithm, slightly modified to use sentinel positions instead of lexicographically distinct sentinels. */
 fn get_lcp_array_from_suffix_array(
     s: &[u8],
     suffix_array: &[u32],
@@ -121,9 +129,8 @@ fn get_lcp_array_from_suffix_array(
 
     // i := position in combined string
     for i in 0..n {
-        // Check this for sanity. Should I be checking if i is a sentinel, or if rank[i] is a sentinel...
         if idx_to_document[i] == SENTINEL_IDX {
-            lcp[rank[i]] = LCP_SENTINEL as usize;
+            lcp[rank[i]] = LCP_SENTINEL;
             continue;
         } else if rank[i] == n - 1 {
             lcp_len = 0;
@@ -136,7 +143,6 @@ fn get_lcp_array_from_suffix_array(
         while idx_to_document[j] == SENTINEL_IDX {
             d_to_next_non_sentinel += 1;
             if rank[i] + d_to_next_non_sentinel >= n - 1 {
-                // TODO: handle this case properly
                 lcp_len = 0;
                 j = 0;
                 break;
@@ -215,7 +221,6 @@ fn calculate_segments(
             let doc_val = idx_to_document[suffix_array[right_bound] as usize];
             if doc_val != SENTINEL_IDX {
                 let bucket = doc_val - 1;
-                // It's not a sentinel
                 if buckets[bucket] == 0 {
                     k_count += 1;
                 }
@@ -254,14 +259,15 @@ struct ValAndIdx {
     idx: usize,
 }
 
-/* Keep track of the minimum lcp value between each segment's start and end. Return the maximum of those. */
+/* Keep track of the minimum lcp value between each segment's start and end. Return the maximum of those. 
+   We use a sorted sliding window which results in an overall O(n) implementation using a deque.
+   Heavily inspired by the sliding window minimum implementation described here:
+   https://people.cs.uct.ac.za/~ksmith/articles/sliding_window_minimum.html
+*/
 fn process_segments<'a>(
     segments: &'a Vec<Segment>,
     lcp_array: &Vec<usize>,
 ) -> (&'a Segment, usize) {
-    if segments.len() == 0 {
-        panic!("No segments passed into process segments"); // TODO; use result
-    }
     let mut max = 0;
     let mut max_segment = &segments[0];
 
@@ -269,10 +275,10 @@ fn process_segments<'a>(
     let mut window_end = 0;
 
     for segment in segments {
-        // Add elements to sliding optimized window to contain
+        // Add elements to sliding window
         while segment.end > window_end + 1 {
             let lcp_val = lcp_array[window_end];
-            if lcp_val != (LCP_SENTINEL as usize) {
+            if lcp_val != LCP_SENTINEL {
                 while !window.is_empty() && window.back().unwrap().val >= lcp_val {
                     window.pop_back();
                 }
@@ -344,6 +350,7 @@ mod tests {
     use super::*;
     use suffix_array::SuffixArray;
 
+    /* A basic correctness test for constructing the LCP array from string inputs. */
     #[test]
     fn correct_lcp_from_strings() {
         let s1 = "banana".to_string();
@@ -364,7 +371,7 @@ mod tests {
             &idx_to_document,
             &rank,
         );
-        let sent = LCP_SENTINEL as usize;
+        let sent = LCP_SENTINEL;
 
         assert_eq!(
             lcp,
@@ -372,6 +379,7 @@ mod tests {
         );
     }
 
+    /* Checking that LCP construction handles characters with the same value as the sentinel. */
     #[test]
     fn correctly_handles_lcp_sentinel_duplicates() {
         let mut s1: Vec<u8> = vec![0, 0, 98, 97, 110]; // \0\0ban
@@ -389,12 +397,13 @@ mod tests {
         let rank = get_inverse_of_permutation(sa_raw);
 
         let lcp = get_lcp_array_from_suffix_array(&s1, sa_raw, &idx_to_document, &rank);
-        let sent = LCP_SENTINEL as usize;
+        let sent = LCP_SENTINEL;
 
         assert_eq!(sa_raw, vec![12, 0, 7, 5, 1, 8, 6, 3, 2, 9, 4, 10, 11]);
         assert_eq!(lcp, vec![sent, 3, 1, sent, 2, 0, 1, 0, 1, 0, 0, 0, 0]); // Notice that the 3rd entry is matching lcp with the 5th and skipping the sentinel
     }
 
+    /* Checking that it finds the correct location and length of LCS when characters have same val as sentinel. */
     #[test]
     fn correctly_finds_lcs_len_that_contains_sentinel() {
         let mut s1: Vec<u8> = vec![0, 0, 98, 97, 110]; // \0\0ban
@@ -418,12 +427,51 @@ mod tests {
         assert_eq!(lcs_metadata.1, 3);
     }
 
+    /* If sentinels were incorrectly accounted for, this would give lcs of [0, 0, 98] between input0 and input1. */
     #[test]
-    fn run_parses_input_properly() {
+    fn run_avoids_sentinels() {
         let mut input = Vec::new();
-        input.push(vec![0, 98, 98]);
-        input.push(vec![1, 3, 0, 98, 97]);
-        input.push(vec![2, 97, 98]);
-        println!("Run result: {:?}", run(&input, 2));
+        input.push(vec![0, 0, 98, 98]);
+        input.push(vec![0, 98, 97, 96, 92, 98]);
+        input.push(vec![0, 98, 96]);
+        let out = run(&input, 2);
+        let expected = LCSOutput {
+            length: 2,
+            positions: vec![
+                FilePosition {
+                    file_index: 1,
+                    offset: 0,
+                },
+                FilePosition {
+                    file_index: 2,
+                    offset: 0,
+                },
+            ],
+        };
+        assert_eq!(out, expected);
+    }
+
+    /* If sentinels were incorrectly accounted for, this would give lcs of [0, 0, 98] between input0 and input1. */
+    #[test]
+    fn run_varies_k_properly() {
+        let mut input = Vec::new();
+        input.push(vec![0, 0, 98, 98]);
+        input.push(vec![0, 98, 97, 96, 92, 98]);
+        input.push(vec![0, 98, 96]);
+        let out = run(&input, 2);
+        let expected = LCSOutput {
+            length: 2,
+            positions: vec![
+                FilePosition {
+                    file_index: 1,
+                    offset: 0,
+                },
+                FilePosition {
+                    file_index: 2,
+                    offset: 0,
+                },
+            ],
+        };
+        assert_eq!(out, expected);
     }
 }

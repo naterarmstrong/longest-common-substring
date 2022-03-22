@@ -24,6 +24,15 @@ fn main() -> Result<(), Error> {
         .unwrap();
     let files: Vec<&str> = matches.values_of("files").unwrap().collect();
 
+    if (k as usize) > files.len() {
+        println!(
+            "Cannot find a substring that exists in {} files when only {} files are provided.",
+            k,
+            files.len()
+        );
+        return Ok(());
+    }
+
     let mut input: Vec<Vec<u8>> = Vec::new();
     for filename in &files {
         input.push(fs::read(filename)?);
